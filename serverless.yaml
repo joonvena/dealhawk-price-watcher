@@ -1,0 +1,100 @@
+service: dh-step-machine
+
+provider:
+  name: aws
+  runtime: go1.x
+  region: ${opt:region, 'eu-west-1'}
+  timeout: 15
+  environment:
+    products_table: ${opt:products_table}
+    user_table: ${opt:user_table}
+    email: ${opt:email}
+
+package:
+  exclude:
+    - ./**
+  include:
+    - ./bin/**
+
+functions:
+  get_products:
+    handler: bin/getproducts
+    iamRoleStatements:
+      - Effect: "Allow"        
+        Action:
+          - dynamodb:Scan      
+        Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/${opt:products_table}"
+
+  check_prices:
+    handler: bin/checkprices
+
+  update_prices:
+    handler: bin/updateprices
+    iamRoleStatements:
+      - Effect: "Allow"
+        Action:
+          - dynamodb:UpdateItem
+        Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/${opt:products_table}"
+
+  notify_users:
+    handler: bin/notifyusers
+    iamRoleStatements:
+      - Effect: "Allow"
+        Action:
+          - dynamodb:Scan
+        Resource: "arn:aws:dynamodb:${self:provider.region}:*:table/${opt:user_table}"
+      - Effect: "Allow"
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+        Resource: "arn:aws:ses:${self:provider.region}:229803897151:identity/*"
+
+stepFunctions:
+  stateMachines:
+    DHStateMachine:
+      events:
+        - schedule: cron(0 23 * * ? *)
+
+      name: DealHawkStateMachine
+      definition:
+        Comment: "This State Machine is used to check product prices."
+        StartAt: GetProducts
+        States:
+          GetProducts:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [get_products, Arn]
+            Next: CheckPrices
+          CheckPrices:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [check_prices, Arn]
+            Next: AnythingToUpdate
+          AnythingToUpdate:
+            Type: Choice
+            Choices:
+            - Variable: "$.update"
+              BooleanEquals: false
+              Next: EndProcess
+            - Variable: "$.update"
+              BooleanEquals: true
+              Next: UpdatePrices
+            Default: EndProcess
+          UpdatePrices:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [update_prices, Arn]
+            Next: NotifyUsers
+          NotifyUsers:
+            Type: Task
+            Resource:
+              Fn::GetAtt: [notify_users, Arn]
+            End: true
+          EndProcess:
+            Type: Succeed
+
+
+plugins:
+  - serverless-step-functions
+  - serverless-pseudo-parameters
+  - serverless-iam-roles-per-function

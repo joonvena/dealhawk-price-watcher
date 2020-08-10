@@ -1,0 +1,5 @@
+bin
+.serverless
+deploy.sh
+db.json
+node_modules
